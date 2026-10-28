@@ -86,6 +86,18 @@ jobs:
         run: |
           set -eu
           P="$PWD/_stealth/patches"
+          # frida-core 的 lib/agent/frida-agent.def 在仓库里是 CRLF（git ls-files --eol = i/crlf），
+          # 而补丁上下文是 LF；Linux runner 不做换行转换，直接 apply 会 "patch does not apply"。
+          # 把补丁涉及的文件统一成 LF（本来就是 LF 的文件为 no-op）。
+          for patch in "$P"/*.patch; do
+            sed -n 's|^+++ b/||p' "$patch" | sort -u
+          done | while IFS= read -r f; do
+            if [ "$f" = "/dev/null" ]; then continue; fi
+            for sub in frida-core frida-gum; do
+              if [ -f "subprojects/$sub/$f" ]; then sed -i 's/\r$//' "subprojects/$sub/$f"; fi
+            done
+          done
+          echo ""
           git -C subprojects/frida-core apply "$P/names-core.patch"
           git -C subprojects/frida-gum apply "$P/names-gum.patch"
           python3 "$P/apply-dedetect.py" --root subprojects/frida-core --apply | tail -5
