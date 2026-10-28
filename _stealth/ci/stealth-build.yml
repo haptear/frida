@@ -1,0 +1,221 @@
+# 魔改 Frida —— Android arm64，固定打 names + selinux-B（无参数，点一下就跑）
+#
+# 用法：仓库 → Actions → 左侧选 stealth-build → Run workflow（不用选任何东西）。
+# 本机零操作：不装 NDK、不编 vala、不 zip。
+#
+# 固定内容：
+#   名字全改（线程名 / agent memfd 名 / 导出符号 / RPC 前缀 / D-Bus 名族 / 端口 / 目录 / socket …）
+#   + SELinux type 改名（策略侧 5 处 + 标签侧 4 处 = 9 处）
+#
+# 想换 ABI 或版本，只改下面 env 里的 ANDROID_ABI / FRIDA_VERSION。
+#
+# ★ 未经实际运行验证（本轮纯分析）。首次跑失败常见原因：
+#   1) frida/vala 构建（上游要求 valac 版本号以 -frida 结尾）
+#   2) ./configure 期间 releng 联网拉依赖
+#   3) 产物路径：server 名叫 sysd，agent 名叫 libm-64.so
+
+name: stealth-build
+
+on:
+  workflow_dispatch:
+
+env:
+  FRIDA_VERSION: '17.9.9'
+  ANDROID_ABI: 'arm64'
+  PATCH_GROUP: 'names+selinux-B'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      FRIDA_DEPS: ${{ github.workspace }}/.deps
+      MESON_BUILD_ROOT: ${{ github.workspace }}/.build
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          path: frida-mg
+
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ninja-build python3 pkg-config curl git unzip zip file
+
+      - name: Setup NDK r29
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+          add-to-path: false
+
+      - name: Verify NDK major 29
+        run: |
+          export ANDROID_NDK_ROOT="${{ steps.ndk.outputs.ndk-path }}"
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+          rev=$(grep '^Pkg.Revision' "$ANDROID_NDK_ROOT/source.properties" | cut -d= -f2 | xargs)
+          major=$(echo "$rev" | cut -d. -f1)
+          echo "NDK=$rev"
+          if [ "$major" != "29" ]; then echo "::error::need NDK r29, got r$major"; exit 1; fi
+
+      - name: Cache frida-vala
+        id: vala-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vala
+          key: frida-vala-r29-v1
+
+      - name: Build frida-vala
+        if: steps.vala-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/frida/vala.git
+          cd vala
+          meson setup _build --prefix="${{ github.workspace }}/.vala" --buildtype=release
+          ninja -C _build
+          ninja -C _build install
+
+      - name: Verify valac -frida suffix
+        run: |
+          export PATH="${{ github.workspace }}/.vala/bin:$PATH"
+          v=$(valac --version)
+          echo "valac=$v"
+          case "$v" in *-frida*) echo OK ;; *) echo "::error::valac lacks -frida"; exit 1 ;; esac
+          echo "${{ github.workspace }}/.vala/bin" >> $GITHUB_PATH
+
+      # 顺序很重要：先打 patch，最后跑 apply-dedetect.py（它按原始字符串替换）
+      - name: Apply patches (names + selinux-B)
+        working-directory: frida-mg
+        shell: bash
+        run: |
+          set -eu
+          P="$PWD/_stealth/patches"
+
+          echo "=== 1/2 names: source patches ==="
+          git -C subprojects/frida-core apply --check "$P/names-core.patch"
+          git -C subprojects/frida-core apply "$P/names-core.patch"
+          git -C subprojects/frida-gum apply --check "$P/names-gum.patch"
+          git -C subprojects/frida-gum apply "$P/names-gum.patch"
+
+          echo "=== 1/2 names: string rewrites (must run last) ==="
+          python3 "$P/apply-dedetect.py" --root subprojects/frida-core --apply | tail -5
+          echo "--- residual check (expect clean) ---"
+          if grep -rn 'frida_agent_main\|frida:rpc' subprojects/frida-core/lib subprojects/frida-core/src subprojects/frida-gum/gum subprojects/frida-gum/bindings --include=*.vala --include=*.c --include=*.js --include=*.ts 2>/dev/null | grep -v '/tests/'; then
+            echo "::warning::still some frida strings above"
+          else
+            echo "clean"
+          fi
+
+          echo "=== 2/2 selinux: type rename 9 sites ==="
+          git -C subprojects/frida-core apply --check "$P/selinux-B-rename-types.patch"
+          git -C subprojects/frida-core apply "$P/selinux-B-rename-types.patch"
+          git -C subprojects/frida-core apply --check "$P/selinux-B2-label-sites.patch"
+          git -C subprojects/frida-core apply "$P/selinux-B2-label-sites.patch"
+          n=$(grep -rn 'sysd_file\|sysd_memfd' subprojects/frida-core/lib/selinux/patch.c subprojects/frida-core/src/linux/linjector.vala subprojects/frida-core/lib/pipe/pipe.vala | wc -l)
+          echo "9-site hits = $n"
+          if [ "$n" != "9" ]; then echo "::error::expect 9, got $n"; exit 1; fi
+
+      - name: Configure
+        working-directory: frida-mg
+        shell: bash
+        run: |
+          ./configure --prefix="${{ github.workspace }}/_out" --host=android-$ANDROID_ABI -- \
+            -Dfrida-gum:devkits=gum,gumjs \
+            -Dfrida-core:compiler_backend=enabled \
+            -Dfrida-core:devkits=core \
+            -Dfrida-core:frida_version=${{ env.FRIDA_VERSION }}
+
+      - name: Make
+        working-directory: frida-mg
+        shell: bash
+        run: make -j$(nproc)
+
+      - name: Install
+        working-directory: frida-mg
+        shell: bash
+        run: make install
+
+      - name: Static check
+        shell: bash
+        run: |
+          set -eu
+          chmod +x frida-mg/_stealth/ci/verify-static.sh
+          BIN=""
+          for c in _out/bin/sysd _out/bin/frida-server; do
+            if [ -f "$c" ]; then BIN="$c"; break; fi
+          done
+          AGENT=""
+          for c in _out/lib/frida-1.0/64/libm-64.so _out/lib/frida-1.0/64/frida-agent.so; do
+            if [ -f "$c" ]; then AGENT="$c"; break; fi
+          done
+          ARTS=""
+          if [ -n "$BIN" ]; then ARTS="$ARTS $BIN"; fi
+          if [ -n "$AGENT" ]; then ARTS="$ARTS $AGENT"; fi
+          if [ -f _out/lib/frida-1.0/64/frida-gadget.so ]; then ARTS="$ARTS _out/lib/frida-1.0/64/frida-gadget.so"; fi
+          echo "artifacts:$ARTS"
+          if [ -z "$ARTS" ]; then echo "::error::no artifacts"; exit 1; fi
+          ./frida-mg/_stealth/ci/verify-static.sh $ARTS | tee verify.log
+          echo "BIN=$BIN" >> $GITHUB_ENV
+
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## static check (names + selinux-B)"
+            echo '```'
+            tail -50 verify.log 2>/dev/null || echo "(no log)"
+            echo '```'
+            echo "static pass != runtime undetectable."
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Package (zip + sha256)
+        if: always()
+        shell: bash
+        run: |
+          set -eu
+          BIN="${BIN:-_out/bin/sysd}"
+          if [ ! -f "$BIN" ]; then BIN="_out/bin/frida-server"; fi
+          BASENAME=$(basename "$BIN")
+          NAME="frida-stealth-${FRIDA_VERSION}-android-${ANDROID_ABI}"
+          mkdir -p "dist/${NAME}"
+          cp "$BIN" "dist/${NAME}/${BASENAME}"
+          if [ -f _out/lib/frida-1.0/64/frida-gadget.so ]; then
+            cp _out/lib/frida-1.0/64/frida-gadget.so "dist/${NAME}/"
+          fi
+          {
+            echo "package : ${NAME}"
+            echo "server  : ${BASENAME}"
+            echo "patches : ${PATCH_GROUP}"
+            echo "version : ${FRIDA_VERSION}"
+            echo "build   : run ${{ github.run_number }} commit ${{ github.sha }}"
+            echo ""
+            echo "push and run (device with root):"
+            echo "  adb push ${BASENAME} /data/local/tmp/.s"
+            echo "  adb shell \"su -c 'chmod 755 /data/local/tmp/.s'\""
+            echo "  adb shell \"su -c 'setsid /data/local/tmp/.s -l 127.0.0.1:53311 -d /data/local/tmp/.s.d >/dev/null 2>&1 </dev/null &'\""
+            echo ""
+            echo "connect from host:"
+            echo "  adb forward tcp:53311 tcp:53311"
+            echo "  frida -H 127.0.0.1:53311 -f <package> -l script.js"
+            echo "  D-Bus 名族与 RPC 前缀已改，必须用 host-build.yml 产出的同源 CLI（pip 的 frida 连不上）"
+            echo ""
+            echo "note: static check only. runtime detectability needs a real device."
+          } > "dist/${NAME}/USE.txt"
+          ( cd dist && zip -qr "${NAME}.zip" "${NAME}" )
+          ( cd dist && sha256sum *.zip > SHA256SUMS )
+          ls -l dist/
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stealth-android
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS
+            verify.log
+          if-no-files-found: warn

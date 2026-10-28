@@ -1,0 +1,6 @@
+# 这些文件必须是 LF：CRLF 的 patch 会让 Linux 上的 git apply 失败
+patches/*.patch text eol=lf
+ci/*.yml       text eol=lf
+ci/*.sh        text eol=lf
+*.md           text eol=lf
+_stealth/patches/*.py text eol=lf

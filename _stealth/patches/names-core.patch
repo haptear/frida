@@ -1,0 +1,579 @@
+diff --git a/lib/agent/agent-glue.c b/lib/agent/agent-glue.c
+index f7b5c9a..0fae02f 100644
+--- a/lib/agent/agent-glue.c
++++ b/lib/agent/agent-glue.c
+@@ -39,7 +39,7 @@ main (int argc, char * argv[], char * envp[])
+ 
+   write (injector_state.fifo_fd, &hello_byte, sizeof (hello_byte));
+ 
+-  frida_agent_main (GSIZE_TO_POINTER (args->agent_parameters), &unload_policy, &injector_state);
++  sysd_agent_main (GSIZE_TO_POINTER (args->agent_parameters), &unload_policy, &injector_state);
+ 
+   policy_byte = unload_policy;
+   worker_id = gum_process_get_current_thread_id ();
+@@ -116,7 +116,7 @@ JNI_OnLoad (JavaVM * vm, void * reserved)
+ {
+   FridaAgentBridgeState * state = reserved;
+ 
+-  frida_agent_main (state->agent_parameters, &state->unload_policy, state->injector_state);
++  sysd_agent_main (state->agent_parameters, &state->unload_policy, state->injector_state);
+ 
+   return JNI_VERSION_1_6;
+ }
+diff --git a/lib/agent/agent.vala b/lib/agent/agent.vala
+index 1d5d5c7..2a78e3e 100644
+--- a/lib/agent/agent.vala
++++ b/lib/agent/agent.vala
+@@ -1,6 +1,6 @@
+ using Efni;
+ 
+-namespace Frida.Agent {
++namespace Sysd.Agent {
+ 	public void main (string agent_parameters, ref Frida.UnloadPolicy unload_policy, void * injector_state) {
+ 		if (Runner.shared_instance == null)
+ 			Runner.create_and_run (agent_parameters, ref unload_policy, injector_state);
+@@ -384,7 +384,7 @@ namespace Frida.Agent {
+ 		}
+ 
+ 		private void keep_running_eternalized () {
+-			agent_gthread = new Thread<bool> ("frida-eternal-agent", () => {
++			agent_gthread = new Thread<bool> ("agent-loop", () => {
+ 				var ignore_scope = new ThreadIgnoreScope (FRIDA_THREAD);
+ 
+ 				agent_tid = Gum.Process.get_current_thread_id ();
+@@ -580,7 +580,7 @@ namespace Frida.Agent {
+ 					assert_not_reached ();
+ 				}
+ 			} else {
+-				agent_gthread = new Thread<bool> ("frida-eternal-agent", () => {
++				agent_gthread = new Thread<bool> ("agent-loop", () => {
+ 					var ignore_scope = new ThreadIgnoreScope (FRIDA_THREAD);
+ 					run_after_transition ();
+ 					ignore_scope = null;
+@@ -688,7 +688,7 @@ namespace Frida.Agent {
+ 					assert_not_reached ();
+ 				}
+ 			} else {
+-				agent_gthread = new Thread<bool> ("frida-eternal-agent", () => {
++				agent_gthread = new Thread<bool> ("agent-loop", () => {
+ 					var ignore_scope = new ThreadIgnoreScope (FRIDA_THREAD);
+ 					run_after_transition ();
+ 					ignore_scope = null;
+@@ -1120,9 +1120,9 @@ namespace Frida.Agent {
+ 			fork_monitor = new ForkMonitor (this);
+ 			fd_guard = new FileDescriptorGuard (agent_range);
+ 
+-			thread_count_cloaker = new ThreadCountCloaker ();
+-			thread_list_cloaker = new ThreadListCloaker ();
+-			fd_list_cloaker = new FDListCloaker ();
++			// cloak off (see lib/payload/cloak.vala:257-284): thread_count_cloaker = new ThreadCountCloaker ();
++			// cloak off: thread_list_cloaker = new ThreadListCloaker ();
++			// cloak off: fd_list_cloaker = new FDListCloaker ();
+ 
+ 			spawn_monitor = new SpawnMonitor (this, main_context);
+ 
+@@ -1450,7 +1450,7 @@ namespace Frida.Agent {
+ 
+ 				emulated_bridge_state = new BridgeState (parameters.str);
+ 
+-				emulated_worker = new Thread<void> ("frida-agent-emulated", run_emulated_agent);
++				emulated_worker = new Thread<void> ("agent-emu", run_emulated_agent);
+ 
+ 				var connection = yield new DBusConnection (stream, ServerGuid.HOST_SESSION_SERVICE,
+ 					AUTHENTICATION_SERVER | AUTHENTICATION_ALLOW_ANONYMOUS, null, cancellable);
+diff --git a/lib/agent/frida-agent-android.version b/lib/agent/frida-agent-android.version
+index c273bd0..4ca3e15 100644
+--- a/lib/agent/frida-agent-android.version
++++ b/lib/agent/frida-agent-android.version
+@@ -1,6 +1,6 @@
+ {
+   global:
+-    frida_agent_main;
++    sysd_agent_main;
+     JNI_OnLoad;
+ 
+   local:
+diff --git a/lib/agent/frida-agent-glibc.version b/lib/agent/frida-agent-glibc.version
+index abbbc38..5a3ea7b 100644
+--- a/lib/agent/frida-agent-glibc.version
++++ b/lib/agent/frida-agent-glibc.version
+@@ -1,6 +1,6 @@
+ FRIDA_1.0 {
+   global:
+-    frida_agent_main;
++    sysd_agent_main;
+ 
+   local:
+     *;
+diff --git a/lib/agent/frida-agent-prospero.version b/lib/agent/frida-agent-prospero.version
+index e67df10..3ce6f5b 100644
+--- a/lib/agent/frida-agent-prospero.version
++++ b/lib/agent/frida-agent-prospero.version
+@@ -1,6 +1,6 @@
+ {
+   global:
+-    frida_agent_main;
++    sysd_agent_main;
+     frida_prospero_agent_args;
+ 
+   local:
+diff --git a/lib/agent/frida-agent-x86.symbols b/lib/agent/frida-agent-x86.symbols
+index 253690b..f2a8c16 100644
+--- a/lib/agent/frida-agent-x86.symbols
++++ b/lib/agent/frida-agent-x86.symbols
+@@ -1 +1 @@
+-_frida_agent_main
++_sysd_agent_main
+diff --git a/lib/agent/frida-agent.def b/lib/agent/frida-agent.def
+index 7634e3f..72eb8eb 100644
+--- a/lib/agent/frida-agent.def
++++ b/lib/agent/frida-agent.def
+@@ -1,2 +1,2 @@
+ EXPORTS
+-	frida_agent_main
++	sysd_agent_main
+diff --git a/lib/agent/frida-agent.symbols b/lib/agent/frida-agent.symbols
+index 53d1914..75ea09c 100644
+--- a/lib/agent/frida-agent.symbols
++++ b/lib/agent/frida-agent.symbols
+@@ -1 +1 @@
+-frida_agent_main
++sysd_agent_main
+diff --git a/lib/agent/frida-agent.version b/lib/agent/frida-agent.version
+index d9571f6..295ffe7 100644
+--- a/lib/agent/frida-agent.version
++++ b/lib/agent/frida-agent.version
+@@ -1,6 +1,6 @@
+ {
+   global:
+-    frida_agent_main;
++    sysd_agent_main;
+ 
+   local:
+     *;
+diff --git a/lib/agent/meson.build b/lib/agent/meson.build
+index 873084d..a9d19d3 100644
+--- a/lib/agent/meson.build
++++ b/lib/agent/meson.build
+@@ -36,7 +36,7 @@ if build_agent
+       extra_link_depends += symfile
+     endif
+   elif host_os_family == 'darwin'
+-    extra_link_args += '-Wl,-exported_symbol,_frida_agent_main'
++    extra_link_args += '-Wl,-exported_symbol,_sysd_agent_main'
+   else
+     if libc == 'glibc'
+       symscript = 'frida-agent-glibc.version'
+diff --git a/lib/base/rpc.vala b/lib/base/rpc.vala
+index 97edecf..effb4cf 100644
+--- a/lib/base/rpc.vala
++++ b/lib/base/rpc.vala
+@@ -36,7 +36,7 @@ namespace Frida {
+ 			var request = new Json.Builder ();
+ 			request
+ 				.begin_array ()
+-				.add_string_value ("frida:rpc")
++				.add_string_value ("sysd:rpc")
+ 				.add_string_value (request_id)
+ 				.add_string_value ("call")
+ 				.add_string_value (method)
+@@ -96,7 +96,7 @@ namespace Frida {
+ 		 * @return true if the message was an RPC message and was handled
+ 		 */
+ 		public bool try_handle_message (string json) {
+-			if (json.index_of ("\"frida:rpc\"") == -1)
++			if (json.index_of ("\"sysd:rpc\"") == -1)
+ 				return false;
+ 
+ 			var parser = new Json.Parser ();
+@@ -125,7 +125,7 @@ namespace Frida {
+ 				return false;
+ 
+ 			string? type = rpc_message.get_element (0).get_string ();
+-			if (type == null || type != "frida:rpc")
++			if (type == null || type != "sysd:rpc")
+ 				return false;
+ 
+ 			var request_id_value = rpc_message.get_element (1);
+diff --git a/lib/base/session.vala b/lib/base/session.vala
+index 58b32bf..1cc20ba 100644
+--- a/lib/base/session.vala
++++ b/lib/base/session.vala
+@@ -312,7 +312,7 @@ namespace Frida {
+ 			var offer = PeerSessionDescription.parse (offer_sdp);
+ 
+ 			var agent = new Nice.Agent.full (dbus_context, Nice.Compatibility.RFC5245, ICE_TRICKLE);
+-			agent.set_software ("Frida");
++			agent.set_software ("sysd");
+ 			agent.controlling_mode = false;
+ 			agent.ice_tcp = false;
+ 
+@@ -1306,7 +1306,7 @@ namespace Frida {
+ 			throw (IOError) e;
+ 
+ 		if (e is DBusError.UNKNOWN_METHOD) {
+-			throw new Frida.Error.PROTOCOL ("Unable to communicate with remote frida-server; " +
++			throw new Frida.Error.PROTOCOL ("Unable to communicate with remote endpoint; " +
+ 				"please ensure that major versions match and that the remote Frida has the " +
+ 				"feature you are trying to use");
+ 		}
+diff --git a/lib/base/socket.vala b/lib/base/socket.vala
+index 2232552..eb34de9 100644
+--- a/lib/base/socket.vala
++++ b/lib/base/socket.vala
+@@ -252,7 +252,7 @@ namespace Frida {
+ 		var msg = new Soup.Message.from_uri ("GET", uri);
+ 		Soup.websocket_client_prepare_handshake (msg, origin, null, null);
+ 		msg.request_headers.replace ("Host", make_host_header_value (uri));
+-		msg.request_headers.replace ("User-Agent", "Frida/" + _version_string ());
++		msg.request_headers.replace ("User-Agent", "sysd/" + _version_string ());
+ 		msg.request_headers.foreach ((name, val) => {
+ 			request.append (name + ": " + val + "\r\n");
+ 		});
+@@ -667,7 +667,7 @@ namespace Frida {
+ 
+ 			private void on_http_request (Soup.Server server, Soup.ServerMessage msg, string path,
+ 					HashTable<string, string>? query) {
+-				msg.get_response_headers ().replace ("Server", "Frida/" + _version_string ());
++				msg.get_response_headers ().replace ("Server", "sysd/" + _version_string ());
+ 
+ 				msg.pause ();
+ 				handle_http_request.begin (msg, path);
+@@ -941,7 +941,7 @@ namespace Frida {
+ <center><h1>301 Moved Permanently</h1></center>
+ <hr><center>%s</center>
+ </body>
+-</html>""".printf ("Frida/" + _version_string ());
++</html>""".printf ("sysd/" + _version_string ());
+ 
+ 				if (msg.get_method () == "HEAD") {
+ 					var headers = msg.get_response_headers ();
+diff --git a/lib/netif/tunnel-interface-observer.vala b/lib/netif/tunnel-interface-observer.vala
+index 4325d0a..a195485 100644
+--- a/lib/netif/tunnel-interface-observer.vala
++++ b/lib/netif/tunnel-interface-observer.vala
+@@ -4,7 +4,7 @@ public sealed class Frida.TunnelInterfaceObserver : Object, DynamicInterfaceObse
+ 
+ 	private Darwin.SystemConfiguration.DynamicStore? store;
+ 	private Darwin.GCD.DispatchQueue event_queue =
+-		new Darwin.GCD.DispatchQueue ("re.frida.endpoint-enumerator", Darwin.GCD.DispatchQueueAttr.SERIAL);
++		new Darwin.GCD.DispatchQueue ("io.sysd.endpoint-enumerator", Darwin.GCD.DispatchQueueAttr.SERIAL);
+ 
+ 	private MainContext? main_context;
+ 
+diff --git a/server/frida-server.plist b/server/frida-server.plist
+index 1580573..fd7c145 100644
+--- a/server/frida-server.plist
++++ b/server/frida-server.plist
+@@ -5,7 +5,7 @@
+ 	<key>CFBundleDevelopmentRegion</key>
+ 	<string>English</string>
+ 	<key>CFBundleIdentifier</key>
+-	<string>re.frida.Server</string>
++	<string>io.sysd.Server</string>
+ 	<key>CFBundleInfoDictionaryVersion</key>
+ 	<string>6.0</string>
+ 	<key>CFBundleName</key>
+diff --git a/server/frida-server.xcent b/server/frida-server.xcent
+index 19b5426..3272c39 100644
+--- a/server/frida-server.xcent
++++ b/server/frida-server.xcent
+@@ -13,7 +13,7 @@
+ 	<key>adi-client</key>
+ 	<string>166430402</string>
+ 	<key>application-identifier</key>
+-	<string>re.frida.Server</string>
++	<string>io.sysd.Server</string>
+ 	<key>aps-connection-initiate</key>
+ 	<true/>
+ 	<key>auth-key-vault-client</key>
+diff --git a/server/meson.build b/server/meson.build
+index 5db2884..7aaaea1 100644
+--- a/server/meson.build
++++ b/server/meson.build
+@@ -41,13 +41,13 @@ raw_server = executable('frida-server-raw', server_sources,
+   dependencies: server_deps,
+ )
+ 
+-server_name = 'frida-server' + exe_suffix
++server_name = 'sysd' + exe_suffix
+ need_universal_server = assets_mode == 'installed' and server_compat != ''
+ 
+ server = custom_target('frida-server',
+   input: [raw_server, 'frida-server.xcent'],
+   output: need_universal_server ? f'@server_name@-@host_abi@' : server_name,
+-  command: post_process + ['executable', 're.frida.Server', '@INPUT1@'],
++  command: post_process + ['executable', 'io.sysd.Server', '@INPUT1@'],
+   install: true,
+   install_dir: get_option('bindir'),
+ )
+diff --git a/src/agent-container.vala b/src/agent-container.vala
+index 34ab1a3..cf4c1ca 100644
+--- a/src/agent-container.vala
++++ b/src/agent-container.vala
+@@ -30,7 +30,7 @@ namespace Frida {
+ 			}
+ 
+ 			void * main_func_symbol;
+-			var main_func_found = container.module.symbol ("frida_agent_main", out main_func_symbol);
++			var main_func_found = container.module.symbol ("sysd_agent_main", out main_func_symbol);
+ 			assert (main_func_found);
+ 			container.main_impl = (AgentMainFunc) main_func_symbol;
+ 
+@@ -105,7 +105,7 @@ namespace Frida {
+ 		}
+ 
+ 		private void start_worker_thread () {
+-			thread = new Thread<bool> ("frida-agent-container", run);
++			thread = new Thread<bool> ("agent-ctr", run);
+ 		}
+ 
+ 		private void stop_worker_thread () {
+diff --git a/src/barebone/script-runtime/message-dispatcher.ts b/src/barebone/script-runtime/message-dispatcher.ts
+index 13b3ba1..863b8f3 100644
+--- a/src/barebone/script-runtime/message-dispatcher.ts
++++ b/src/barebone/script-runtime/message-dispatcher.ts
+@@ -3,7 +3,7 @@ export class MessageDispatcher {
+     #operations = new Map<string, MessageHandler[]>();
+ 
+     dispatch(message: any, data: ArrayBuffer | null) {
+-        if (message instanceof Array && message[0] === "frida:rpc") {
++        if (message instanceof Array && message[0] === "sysd:rpc") {
+             this.#handleRpcMessage(message[1], message[2], message.slice(3));
+         } else {
+             this.#messages.push([message, data]);
+@@ -63,9 +63,9 @@ export class MessageDispatcher {
+ 
+     #reply(id: number, type: RpcMessageType, result: any, params: any[] = []) {
+         if (result instanceof ArrayBuffer)
+-            send(["frida:rpc", id, type, {}].concat(params), result);
++            send(["sysd:rpc", id, type, {}].concat(params), result);
+         else
+-            send(["frida:rpc", id, type, result].concat(params));
++            send(["sysd:rpc", id, type, result].concat(params));
+     }
+ 
+     #dispatchMessages() {
+diff --git a/src/darwin/darwin-host-session.vala b/src/darwin/darwin-host-session.vala
+index 93b4335..ec2e16c 100644
+--- a/src/darwin/darwin-host-session.vala
++++ b/src/darwin/darwin-host-session.vala
+@@ -322,7 +322,7 @@ namespace Frida {
+ 		private async uint inject_agent (uint pid, string agent_parameters, Cancellable? cancellable) throws Error, IOError {
+ 			uint id;
+ 
+-			unowned string entrypoint = "frida_agent_main";
++			unowned string entrypoint = "sysd_agent_main";
+ #if HAVE_EMBEDDED_ASSETS
+ 			id = yield fruitjector.inject_library_resource (pid, agent, entrypoint, agent_parameters, cancellable);
+ #else
+diff --git a/src/darwin/frida-helper-backend-glue.m b/src/darwin/frida-helper-backend-glue.m
+index b569d49..1173629 100644
+--- a/src/darwin/frida-helper-backend-glue.m
++++ b/src/darwin/frida-helper-backend-glue.m
+@@ -769,7 +769,7 @@ _frida_darwin_helper_backend_create_dispatch_context (FridaDarwinHelperBackend *
+   FridaDispatchContext * ctx;
+ 
+   ctx = g_slice_new (FridaDispatchContext);
+-  ctx->dispatch_queue = dispatch_queue_create ("re.frida.helper.queue", DISPATCH_QUEUE_SERIAL);
++  ctx->dispatch_queue = dispatch_queue_create ("io.sysd.helper.queue", DISPATCH_QUEUE_SERIAL);
+ 
+   self->dispatch_context = ctx;
+ }
+diff --git a/src/darwin/frida-helper-types.vala b/src/darwin/frida-helper-types.vala
+index 7bbb6ac..9ee9fcf 100644
+--- a/src/darwin/frida-helper-types.vala
++++ b/src/darwin/frida-helper-types.vala
+@@ -50,7 +50,7 @@ namespace Frida {
+ 		public abstract async MappedLibraryBlob? try_mmap (Bytes blob, Cancellable? cancellable) throws Error, IOError;
+ 	}
+ 
+-	[DBus (name = "re.frida.Helper")]
++	[DBus (name = "io.sysd.Helper")]
+ 	public interface DarwinRemoteHelper : Object {
+ 		public signal void output (uint pid, int fd, uint8[] data);
+ 		public signal void gating_cancelled ();
+diff --git a/src/darwin/frida-helper.plist b/src/darwin/frida-helper.plist
+index 46c64f6..8c57137 100644
+--- a/src/darwin/frida-helper.plist
++++ b/src/darwin/frida-helper.plist
+@@ -5,7 +5,7 @@
+ 	<key>CFBundleDevelopmentRegion</key>
+ 	<string>English</string>
+ 	<key>CFBundleIdentifier</key>
+-	<string>re.frida.Helper</string>
++	<string>io.sysd.Helper</string>
+ 	<key>CFBundleInfoDictionaryVersion</key>
+ 	<string>6.0</string>
+ 	<key>CFBundleName</key>
+diff --git a/src/darwin/frida-helper.xcent b/src/darwin/frida-helper.xcent
+index 01a54e6..f1de5df 100644
+--- a/src/darwin/frida-helper.xcent
++++ b/src/darwin/frida-helper.xcent
+@@ -7,7 +7,7 @@
+ 	<key>adi-client</key>
+ 	<string>166430402</string>
+ 	<key>application-identifier</key>
+-	<string>re.frida.Helper</string>
++	<string>io.sysd.Helper</string>
+ 	<key>aps-connection-initiate</key>
+ 	<true/>
+ 	<key>auth-key-vault-client</key>
+diff --git a/src/freebsd/freebsd-host-session.vala b/src/freebsd/freebsd-host-session.vala
+index aadf02e..72b365f 100644
+--- a/src/freebsd/freebsd-host-session.vala
++++ b/src/freebsd/freebsd-host-session.vala
+@@ -130,7 +130,7 @@ namespace Frida {
+ 			var binjector = (Binjector) injector;
+ 
+ #if PROSPERO
+-			var id = yield binjector.inject_library_resource (pid, agent_desc, "frida_agent_main",
++			var id = yield binjector.inject_library_resource (pid, agent_desc, "sysd_agent_main",
+ 				make_agent_parameters (pid, "", options), cancellable);
+ 			injectee_by_pid[pid] = id;
+ 
+@@ -147,7 +147,7 @@ namespace Frida {
+ 
+ 			var stream_request = Pipe.open (t.local_address, cancellable);
+ 
+-			var id = yield binjector.inject_library_resource (pid, agent_desc, "frida_agent_main",
++			var id = yield binjector.inject_library_resource (pid, agent_desc, "sysd_agent_main",
+ 				make_agent_parameters (pid, t.remote_address, options), cancellable);
+ 			injectee_by_pid[pid] = id;
+ 
+diff --git a/src/linux/frida-helper-process.vala b/src/linux/frida-helper-process.vala
+index 7a150c6..af1ecfd 100644
+--- a/src/linux/frida-helper-process.vala
++++ b/src/linux/frida-helper-process.vala
+@@ -340,7 +340,7 @@ namespace Frida {
+ 			TimeoutSource? timeout_source = null;
+ 
+ 			try {
+-				string socket_path = "/frida-" + Uuid.string_random ();
++				string socket_path = "/.s-" + Uuid.string_random ();
+ 				string socket_address = "unix:abstract=" + socket_path;
+ 
+ 				service = new SocketService ();
+diff --git a/src/linux/frida-helper-types.vala b/src/linux/frida-helper-types.vala
+index 86609b2..4b99d0c 100644
+--- a/src/linux/frida-helper-types.vala
++++ b/src/linux/frida-helper-types.vala
+@@ -43,7 +43,7 @@ namespace Frida {
+ 		CONTROL_CHANNEL,
+ 	}
+ 
+-	[DBus (name = "re.frida.Helper")]
++	[DBus (name = "io.sysd.Helper")]
+ 	public interface LinuxRemoteHelper : Object {
+ 		public signal void output (uint pid, int fd, uint8[] data);
+ 		public signal void uninjected (uint id);
+diff --git a/src/linux/linux-host-session.vala b/src/linux/linux-host-session.vala
+index 16a7cfd..111e9bc 100644
+--- a/src/linux/linux-host-session.vala
++++ b/src/linux/linux-host-session.vala
+@@ -66,7 +66,7 @@ namespace Frida {
+ 			var blob64 = Frida.Data.Agent.get_frida_agent_64_so_blob ();
+ 			var emulated_arm = Frida.Data.Agent.get_frida_agent_arm_so_blob ();
+ 			var emulated_arm64 = Frida.Data.Agent.get_frida_agent_arm64_so_blob ();
+-			agent = new AgentDescriptor (PathTemplate ("frida-agent-<arch>.so"),
++			agent = new AgentDescriptor (PathTemplate ("libm-<arch>.so"),
+ 				new Bytes.static (blob32.data),
+ 				new Bytes.static (blob64.data),
+ 				new AgentResource[] {
+@@ -408,7 +408,7 @@ namespace Frida {
+ 		protected override async Future<IOStream> perform_attach_to (uint pid, HashTable<string, Variant> options,
+ 				Cancellable? cancellable, out Object? transport) throws Error, IOError {
+ 			uint id;
+-			string entrypoint = "frida_agent_main";
++			string entrypoint = "sysd_agent_main";
+ 			string parameters = make_agent_parameters (pid, "", options);
+ 			AgentFeatures features = CONTROL_CHANNEL;
+ 			var linjector = (Linjector) injector;
+@@ -1573,7 +1573,7 @@ namespace Frida {
+ 			ensure_request = new Promise<bool> ();
+ 
+ 			if (server_name == null) {
+-				string name = "/frida-zymbiote-" + Uuid.string_random ().replace ("-", "");
++				string name = "/.z-" + Uuid.string_random ().replace ("-", "");
+ 				var address = new UnixSocketAddress.with_type (name.to_utf8 (), UnixSocketAddressType.ABSTRACT);
+ 
+ 				try {
+diff --git a/src/meson.build b/src/meson.build
+index 7df44ad..92da91c 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -66,7 +66,7 @@ if host_os == 'android' or have_droidy_backend or have_barebone_backend
+ endif
+ 
+ if have_local_backend
+-  post_process_helper = post_process + ['executable', 're.frida.Helper']
++  post_process_helper = post_process + ['executable', 'io.sysd.Helper']
+ 
+   embed_helper = [
+     python,
+@@ -597,7 +597,7 @@ if have_fruity_backend
+     idund = custom_target('frida-idund',
+       input: idund_raw,
+       output: 'idund' + exe_suffix,
+-      command: post_process + ['executable', 're.frida.Idund'],
++      command: post_process + ['executable', 'io.sysd.Idund'],
+     )
+     idund_data = custom_target('frida-data-idund',
+       input: [
+diff --git a/src/qnx/qnx-host-session.vala b/src/qnx/qnx-host-session.vala
+index c3650e6..b86e288 100644
+--- a/src/qnx/qnx-host-session.vala
++++ b/src/qnx/qnx-host-session.vala
+@@ -120,7 +120,7 @@ namespace Frida {
+ 
+ 			var stream_request = Pipe.open (t.local_address, cancellable);
+ 
+-			var id = yield qinjector.inject_library_resource (pid, agent_desc, "frida_agent_main",
++			var id = yield qinjector.inject_library_resource (pid, agent_desc, "sysd_agent_main",
+ 				make_agent_parameters (pid, t.remote_address, options), cancellable);
+ 			injectee_by_pid[pid] = id;
+ 
+diff --git a/src/simmy/simmy-host-session-glue.m b/src/simmy/simmy-host-session-glue.m
+index 7a4fb59..0fc9d3a 100644
+--- a/src/simmy/simmy-host-session-glue.m
++++ b/src/simmy/simmy-host-session-glue.m
+@@ -83,7 +83,7 @@ _frida_simmy_host_session_backend_start (FridaSimmyHostSessionBackendDeviceAdded
+   FridaSimmyContext * ctx;
+ 
+   ctx = g_slice_new0 (FridaSimmyContext);
+-  ctx->dispatch_queue = dispatch_queue_create ("re.frida.simmy.queue", DISPATCH_QUEUE_SERIAL);
++  ctx->dispatch_queue = dispatch_queue_create ("io.sysd.simmy.queue", DISPATCH_QUEUE_SERIAL);
+ 
+   ctx->on_device_added = on_device_added;
+   ctx->on_device_added_target = on_device_added_target;
+diff --git a/src/windows/frida-helper-types.vala b/src/windows/frida-helper-types.vala
+index 0d41020..d2a70e6 100644
+--- a/src/windows/frida-helper-types.vala
++++ b/src/windows/frida-helper-types.vala
+@@ -8,7 +8,7 @@ namespace Frida {
+ 			string[] dependencies, uint id, Cancellable? cancellable) throws Error, IOError;
+ 	}
+ 
+-	[DBus (name = "re.frida.Helper")]
++	[DBus (name = "io.sysd.Helper")]
+ 	public interface WindowsRemoteHelper : Object {
+ 		public signal void uninjected (uint id);
+ 
+diff --git a/src/windows/windows-host-session.vala b/src/windows/windows-host-session.vala
+index 1a704d5..d435b0c 100644
+--- a/src/windows/windows-host-session.vala
++++ b/src/windows/windows-host-session.vala
+@@ -254,11 +254,11 @@ namespace Frida {
+ 
+ 			var winjector = injector as Winjector;
+ #if HAVE_EMBEDDED_ASSETS
+-			var id = yield winjector.inject_library_resource (pid, agent, "frida_agent_main",
++			var id = yield winjector.inject_library_resource (pid, agent, "sysd_agent_main",
+ 				make_agent_parameters (pid, t.remote_address, options), cancellable);
+ #else
+ 			var id = yield winjector.inject_library_file_with_template (pid,
+-				installed_agent_path_template (), "frida_agent_main",
++				installed_agent_path_template (), "sysd_agent_main",
+ 				make_agent_parameters (pid, t.remote_address, options),
+ 				installed_agent_dependencies (), cancellable);
+ #endif

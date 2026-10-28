@@ -1,0 +1,41 @@
+diff --git a/lib/pipe/pipe.vala b/lib/pipe/pipe.vala
+index cd0f8e1..7b64423 100644
+--- a/lib/pipe/pipe.vala
++++ b/lib/pipe/pipe.vala
+@@ -169,7 +169,7 @@ namespace Frida {
+ 
+ 					Posix.chmod (path, Posix.S_IRUSR | Posix.S_IWUSR | Posix.S_IRGRP | Posix.S_IWGRP | Posix.S_IROTH | Posix.S_IWOTH);
+ #if ANDROID
+-					SELinux.setfilecon (path, "u:object_r:frida_file:s0");
++					SELinux.setfilecon (path, "u:object_r:sysd_file:s0");
+ #endif
+ 
+ 					establish_server.begin (socket, server_address, promise, cancellable);
+diff --git a/src/linux/linjector.vala b/src/linux/linjector.vala
+index 5671438..968e3ca 100644
+--- a/src/linux/linjector.vala
++++ b/src/linux/linjector.vala
+@@ -265,20 +265,20 @@ namespace Frida {
+ 	private static void adjust_directory_permissions (string path) {
+ 		FileUtils.chmod (path, 0755);
+ #if ANDROID
+-		SELinux.setfilecon (path, "u:object_r:frida_file:s0");
++		SELinux.setfilecon (path, "u:object_r:sysd_file:s0");
+ #endif
+ 	}
+ 
+ 	private static void adjust_file_permissions (string path) {
+ 		FileUtils.chmod (path, path.has_suffix (".so") ? 0755 : 0644);
+ #if ANDROID
+-		SELinux.setfilecon (path, "u:object_r:frida_file:s0");
++		SELinux.setfilecon (path, "u:object_r:sysd_file:s0");
+ #endif
+ 	}
+ 
+ 	private static void adjust_fd_permissions (FileDescriptor fd) {
+ #if ANDROID
+-		SELinux.fsetfilecon (fd.handle, "u:object_r:frida_memfd:s0");
++		SELinux.fsetfilecon (fd.handle, "u:object_r:sysd_memfd:s0");
+ #endif
+ 	}
+ }

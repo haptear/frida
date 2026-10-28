@@ -1,0 +1,110 @@
+# 电脑端（host）同源构建 —— 可选，只有需要连"改了协议"的服务端时才用
+#
+# 为什么需要：names 组改了两处「两端协议」
+#   D-Bus 名族  re.frida.*  -> io.sysd.*
+#   RPC 前缀    frida:rpc   -> sysd:rpc
+# 只改服务端、客户端仍用 pip 装的 frida，会握手失败（unexpected message）。
+# 所以要用本 workflow 产出的同源 CLI。
+#
+# 无参数：点一下就跑，产出 _out_host/bin/* 与 lib/*.so*。
+# ★ 未经实际运行验证；首次跑可能需要补系统依赖。
+
+name: host-build
+
+on:
+  workflow_dispatch:
+
+env:
+  FRIDA_VERSION: '17.9.9'
+  PATCH_GROUP: 'names+selinux-B'
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      FRIDA_DEPS: ${{ github.workspace }}/.deps
+      MESON_BUILD_ROOT: ${{ github.workspace }}/.build
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          path: frida-mg
+
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ninja-build python3 pkg-config curl git unzip zip file libssl-dev
+
+      - name: Cache frida-vala
+        id: vala-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vala
+          key: frida-vala-r29-v1
+
+      - name: Build frida-vala
+        if: steps.vala-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/frida/vala.git
+          cd vala
+          meson setup _build --prefix="${{ github.workspace }}/.vala" --buildtype=release
+          ninja -C _build
+          ninja -C _build install
+
+      - name: Add vala to PATH
+        run: |
+          v=$(PATH="${{ github.workspace }}/.vala/bin:$PATH" valac --version)
+          echo "valac=$v"
+          case "$v" in *-frida*) echo OK ;; *) echo "::error::valac lacks -frida"; exit 1 ;; esac
+          echo "${{ github.workspace }}/.vala/bin" >> $GITHUB_PATH
+
+      - name: Apply same patches
+        working-directory: frida-mg
+        shell: bash
+        run: |
+          set -eu
+          P="$PWD/_stealth/patches"
+          git -C subprojects/frida-core apply "$P/names-core.patch"
+          git -C subprojects/frida-gum apply "$P/names-gum.patch"
+          python3 "$P/apply-dedetect.py" --root subprojects/frida-core --apply | tail -5
+          git -C subprojects/frida-core apply "$P/selinux-B-rename-types.patch"
+          git -C subprojects/frida-core apply "$P/selinux-B2-label-sites.patch"
+
+      - name: Configure for linux host
+        working-directory: frida-mg
+        shell: bash
+        run: |
+          ./configure --prefix="${{ github.workspace }}/_out_host" --host=linux-x86_64 -- \
+            -Dfrida-core:frida_version=${{ env.FRIDA_VERSION }}
+
+      - name: Make
+        working-directory: frida-mg
+        shell: bash
+        run: make -j$(nproc)
+
+      - name: Install
+        working-directory: frida-mg
+        shell: bash
+        run: make install
+
+      - name: Show what got built
+        shell: bash
+        run: |
+          echo "--- bin ---"
+          ls -l _out_host/bin || true
+          echo "--- lib ---"
+          ls -l _out_host/lib || true
+
+      - name: Upload host CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-cli
+          path: |
+            _out_host/bin/*
+            _out_host/lib/*.so*
+          if-no-files-found: warn
