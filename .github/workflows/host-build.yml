@@ -38,14 +38,17 @@ jobs:
       - name: System deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ninja-build python3 pkg-config curl git unzip zip file libssl-dev
+          sudo apt-get install -y build-essential ninja-build meson valac libglib2.0-dev python3 pkg-config curl git unzip zip file libssl-dev
+          echo "meson: $(meson --version)"
+          echo "valac(bootstrap): $(valac --version)"
+          echo "ninja: $(ninja --version)"
 
       - name: Cache frida-vala
         id: vala-cache
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.vala
-          key: frida-vala-r29-v1
+          key: frida-vala-r29-v2
 
       - name: Build frida-vala
         if: steps.vala-cache.outputs.cache-hit != 'true'
