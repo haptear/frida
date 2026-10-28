@@ -59,12 +59,26 @@ jobs:
           ninja -C _build
           ninja -C _build install
 
-      - name: Add vala to PATH
+      - name: Wire frida-vala (PATH + LD_LIBRARY_PATH) and verify -frida suffix
+        shell: bash
         run: |
-          v=$(PATH="${{ github.workspace }}/.vala/bin:$PATH" valac --version)
+          set -eu
+          prefix="${{ github.workspace }}/.vala"
+          codegen=$(find "$prefix" -type f -name 'libvalacodegen.so*' | head -n1)
+          if [ -z "$codegen" ]; then echo "::error::libvalacodegen.so not found under $prefix"; exit 1; fi
+          pkglibdir=$(dirname "$codegen")
+          libdir=$(dirname "$pkglibdir")
+          prev_ld="${LD_LIBRARY_PATH:-}"
+          vala_ld="$pkglibdir:$libdir${prev_ld:+:$prev_ld}"
+          export PATH="$prefix/bin:$PATH"
+          export LD_LIBRARY_PATH="$vala_ld"
+          v=$(valac --version)
           echo "valac=$v"
+          echo "pkglibdir=$pkglibdir"
+          echo "libdir=$libdir"
           case "$v" in *-frida*) echo OK ;; *) echo "::error::valac lacks -frida"; exit 1 ;; esac
-          echo "${{ github.workspace }}/.vala/bin" >> $GITHUB_PATH
+          echo "$prefix/bin" >> $GITHUB_PATH
+          echo "LD_LIBRARY_PATH=$vala_ld" >> $GITHUB_ENV
 
       - name: Apply same patches
         working-directory: frida-mg
